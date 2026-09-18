@@ -1,13 +1,13 @@
+import io
+import os
+import re
+
+import joblib
+import numpy as np
+
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-
-import joblib
-import os
-import re
-import io
-import numpy as np
-
 from pypdf import PdfReader
 
 
@@ -15,7 +15,22 @@ from pypdf import PdfReader
 # CONFIGURATION
 # ============================================================
 
-BASE_DIR = r"E:\Resume_Analysis"
+# Project structure:
+#
+# Resume_Analysis/
+# ├── backend/
+# │   └── main.py
+# ├── models/
+# │   └── resume_classifier.joblib
+# └── evaluation/
+#
+# This works on both Windows and Render/Linux.
+
+BASE_DIR = os.path.dirname(
+    os.path.dirname(
+        os.path.abspath(__file__)
+    )
+)
 
 MODEL_PATH = os.path.join(
     BASE_DIR,
@@ -31,52 +46,60 @@ STRICT_ACCURACY = 91.18
 
 
 # ============================================================
-# LOAD MODEL
+# LOAD TRAINED MODEL
 # ============================================================
 
-if not os.path.exists(MODEL_PATH):
+if not os.path.isfile(MODEL_PATH):
 
     raise FileNotFoundError(
-        f"""
-============================================================
-MODEL NOT FOUND
-============================================================
-
-Expected location:
-
-{MODEL_PATH}
-
-Please run train_model.py first.
-"""
+        "\n"
+        "============================================================\n"
+        "MODEL NOT FOUND\n"
+        "============================================================\n"
+        f"Expected model location:\n{MODEL_PATH}\n\n"
+        "Make sure models/resume_classifier.joblib exists "
+        "in the GitHub repository.\n"
+        "============================================================"
     )
 
-model = joblib.load(MODEL_PATH)
+try:
+
+    model = joblib.load(MODEL_PATH)
+
+except Exception as e:
+
+    raise RuntimeError(
+        f"Could not load trained model: {e}"
+    )
 
 
 # ============================================================
-# FASTAPI
+# FASTAPI APPLICATION
 # ============================================================
 
 app = FastAPI(
     title="AI Resume Screening API",
-
     description="""
 AI Resume Screening System.
 
-Features:
-- Resume text classification
-- PDF resume classification
-- 25 trained ML categories
+Machine Learning:
+- TF-IDF + LinearSVC
+- 25 trained resume categories
+- Top-5 category predictions
+- Decision margin
+- Relative match scores
+
+Additional Intelligence:
 - Education sector detection
 - Law sector detection
 - Technology sector detection
 - Finance sector detection
 - Engineering sector detection
-- Top 5 possible categories
-- Relative match scores
-- Decision margin
+- Human Resources detection
+- Marketing & Sales detection
+- Specialized role detection
+- PDF resume processing
 """,
-
     version=MODEL_VERSION
 )
 
@@ -87,13 +110,9 @@ Features:
 
 app.add_middleware(
     CORSMiddleware,
-
     allow_origins=["*"],
-
-    allow_credentials=True,
-
+    allow_credentials=False,
     allow_methods=["*"],
-
     allow_headers=["*"]
 )
 
@@ -111,20 +130,44 @@ class ResumeRequest(BaseModel):
 # TEXT CLEANING
 # ============================================================
 
-def clean_text(text: str):
+def clean_text(text: str) -> str:
 
     if not text:
         return ""
 
     text = str(text)
 
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    )
+    # Remove excessive whitespace
+    text = re.sub(r"\s+", " ", text)
 
     return text.strip()
+
+
+# ============================================================
+# KEYWORD HELPER
+# ============================================================
+
+def keyword_exists(
+    text: str,
+    keyword: str
+) -> bool:
+
+    keyword = keyword.lower().strip()
+
+    if not keyword:
+        return False
+
+    # Phrases
+    if " " in keyword:
+        return keyword in text
+
+    # Single words
+    pattern = rf"\b{re.escape(keyword)}\b"
+
+    return re.search(
+        pattern,
+        text
+    ) is not None
 
 
 # ============================================================
@@ -170,7 +213,6 @@ SECTOR_KEYWORDS = {
         "university": 3
     },
 
-
     "Law": {
 
         "lawyer": 6,
@@ -214,7 +256,6 @@ SECTOR_KEYWORDS = {
         "llm": 6
     },
 
-
     "Technology": {
 
         "software engineer": 6,
@@ -251,7 +292,6 @@ SECTOR_KEYWORDS = {
         "api development": 5
     },
 
-
     "Finance": {
 
         "accountant": 6,
@@ -279,7 +319,6 @@ SECTOR_KEYWORDS = {
         "sap": 3
     },
 
-
     "Engineering": {
 
         "engineer": 3,
@@ -301,7 +340,6 @@ SECTOR_KEYWORDS = {
         "production engineering": 6
     },
 
-
     "Human Resources": {
 
         "human resources": 6,
@@ -316,7 +354,6 @@ SECTOR_KEYWORDS = {
         "performance management": 5,
         "training and development": 5
     },
-
 
     "Marketing & Sales": {
 
@@ -344,66 +381,39 @@ def detect_sector(text: str):
     text_lower = text.lower()
 
     sector_scores = {}
-
     matched_keywords = {}
 
     for sector, keywords in SECTOR_KEYWORDS.items():
 
         score = 0
-
         matches = []
 
         for keyword, weight in keywords.items():
 
-            # Word/phrase matching
-            if keyword in text_lower:
+            if keyword_exists(
+                text_lower,
+                keyword
+            ):
 
                 score += weight
-
                 matches.append(keyword)
 
         sector_scores[sector] = score
-
         matched_keywords[sector] = matches
 
-
-    # Sort sectors
     ranked_sectors = sorted(
         sector_scores.items(),
         key=lambda x: x[1],
         reverse=True
     )
 
-
-    # Best sector
     best_sector = ranked_sectors[0][0]
-
     best_score = ranked_sectors[0][1]
-
-
-    # Second sector
-    if len(ranked_sectors) > 1:
-
-        second_sector = ranked_sectors[1][0]
-
-        second_score = ranked_sectors[1][1]
-
-    else:
-
-        second_sector = None
-
-        second_score = 0
-
-
-    # --------------------------------------------------------
-    # Sector confidence
-    # --------------------------------------------------------
 
     if best_score == 0:
 
-        sector_confidence = 0
-
         detected_sector = "General / Unknown"
+        sector_confidence = 0
 
     else:
 
@@ -411,23 +421,11 @@ def detect_sector(text: str):
             sector_scores.values()
         )
 
-        if total_score > 0:
-
-            sector_confidence = (
-                best_score /
-                total_score
-            ) * 100
-
-        else:
-
-            sector_confidence = 0
+        sector_confidence = (
+            best_score / total_score
+        ) * 100 if total_score > 0 else 0
 
         detected_sector = best_sector
-
-
-    # --------------------------------------------------------
-    # Top sectors
-    # --------------------------------------------------------
 
     top_sectors = []
 
@@ -443,9 +441,10 @@ def detect_sector(text: str):
             "score": score,
 
             "matched_keywords":
-                matched_keywords[sector][:10]
+                matched_keywords[
+                    sector
+                ][:10]
         })
-
 
     return {
 
@@ -467,7 +466,7 @@ def detect_sector(text: str):
 
 
 # ============================================================
-# ROLE DETECTION FOR SPECIAL SECTORS
+# SPECIALIZED ROLE DETECTION
 # ============================================================
 
 def detect_specialized_role(
@@ -477,14 +476,17 @@ def detect_specialized_role(
 
     text_lower = text.lower()
 
-
-    # ========================================================
+    # --------------------------------------------------------
     # EDUCATION
-    # ========================================================
+    # --------------------------------------------------------
 
     if sector == "Education":
 
         education_roles = {
+
+            "Associate Teacher": [
+                "associate teacher"
+            ],
 
             "Teacher": [
                 "teacher",
@@ -492,10 +494,6 @@ def detect_specialized_role(
                 "lesson plan",
                 "lesson plans",
                 "teaching"
-            ],
-
-            "Associate Teacher": [
-                "associate teacher"
             ],
 
             "Professor / Lecturer": [
@@ -524,40 +522,32 @@ def detect_specialized_role(
             ]
         }
 
-
         role_scores = {}
 
         for role, keywords in education_roles.items():
 
-            score = 0
-
-            for keyword in keywords:
-
-                if keyword in text_lower:
-
-                    score += 1
-
-
-            role_scores[role] = score
-
+            role_scores[role] = sum(
+                1
+                for keyword in keywords
+                if keyword_exists(
+                    text_lower,
+                    keyword
+                )
+            )
 
         best_role = max(
             role_scores,
             key=role_scores.get
         )
 
-
         if role_scores[best_role] > 0:
-
             return best_role
-
 
         return "Education Professional"
 
-
-    # ========================================================
+    # --------------------------------------------------------
     # LAW
-    # ========================================================
+    # --------------------------------------------------------
 
     if sector == "Law":
 
@@ -597,99 +587,82 @@ def detect_specialized_role(
             ]
         }
 
-
         role_scores = {}
 
         for role, keywords in law_roles.items():
 
-            score = 0
-
-            for keyword in keywords:
-
-                if keyword in text_lower:
-
-                    score += 1
-
-
-            role_scores[role] = score
-
+            role_scores[role] = sum(
+                1
+                for keyword in keywords
+                if keyword_exists(
+                    text_lower,
+                    keyword
+                )
+            )
 
         best_role = max(
             role_scores,
             key=role_scores.get
         )
 
-
         if role_scores[best_role] > 0:
-
             return best_role
 
-
         return "Legal Professional"
-
 
     return None
 
 
 # ============================================================
-# MAIN PREDICTION FUNCTION
+# PREDICTION ENGINE
 # ============================================================
 
-def predict_resume(resume_text: str):
+def predict_resume(
+    resume_text: str
+):
 
     resume_text = clean_text(
         resume_text
     )
 
-
     # --------------------------------------------------------
-    # Validation
+    # VALIDATION
     # --------------------------------------------------------
 
     if len(resume_text) < 20:
 
         raise HTTPException(
             status_code=400,
-
             detail=(
                 "Resume text is too short. "
                 "Please provide a valid resume."
             )
         )
 
-
-    # ========================================================
+    # --------------------------------------------------------
     # ML PREDICTION
-    # ========================================================
+    # --------------------------------------------------------
 
     ml_prediction = model.predict(
         [resume_text]
     )[0]
 
-
     decision_scores = model.decision_function(
         [resume_text]
     )
 
-
     if len(decision_scores.shape) == 2:
-
         scores = decision_scores[0]
-
     else:
-
         scores = decision_scores
-
 
     classes = model.classes_
 
-
-    # ========================================================
+    # --------------------------------------------------------
     # RANKING
-    # ========================================================
+    # --------------------------------------------------------
 
     ranked_indices = scores.argsort()[::-1]
-
 
     best_index = ranked_indices[0]
 
@@ -697,10 +670,9 @@ def predict_resume(resume_text: str):
         scores[best_index]
     )
 
-
-    # ========================================================
-    # SECOND BEST
-    # ========================================================
+    # --------------------------------------------------------
+    # SECOND-BEST SCORE
+    # --------------------------------------------------------
 
     if len(ranked_indices) > 1:
 
@@ -714,20 +686,18 @@ def predict_resume(resume_text: str):
 
         second_score = 0.0
 
-
-    # ========================================================
+    # --------------------------------------------------------
     # DECISION MARGIN
-    # ========================================================
+    # --------------------------------------------------------
 
     decision_margin = (
         best_score -
         second_score
     )
 
-
-    # ========================================================
+    # --------------------------------------------------------
     # CONFIDENCE INDICATOR
-    # ========================================================
+    # --------------------------------------------------------
 
     score_min = float(
         scores.min()
@@ -742,54 +712,44 @@ def predict_resume(resume_text: str):
         score_min
     )
 
-
     if score_range > 0:
 
         confidence_indicator = (
-
             (
                 best_score -
                 score_min
             )
             /
             score_range
-
         ) * 100
 
     else:
 
         confidence_indicator = 0.0
 
-
-    # ========================================================
+    # --------------------------------------------------------
     # RELATIVE MATCH SCORES
-    # ========================================================
+    # --------------------------------------------------------
 
     shifted_scores = (
         scores -
         scores.max()
     )
 
-
     exp_scores = np.exp(
         shifted_scores
     )
 
-
     match_scores = (
-
         exp_scores /
         exp_scores.sum()
-
     ) * 100
 
-
-    # ========================================================
-    # TOP 5 ML CATEGORIES
-    # ========================================================
+    # --------------------------------------------------------
+    # TOP 5 CATEGORIES
+    # --------------------------------------------------------
 
     possible_categories = []
-
 
     for rank, index in enumerate(
         ranked_indices[:5],
@@ -802,7 +762,9 @@ def predict_resume(resume_text: str):
                 rank,
 
             "category":
-                str(classes[index]),
+                str(
+                    classes[index]
+                ),
 
             "match_score":
                 round(
@@ -814,137 +776,117 @@ def predict_resume(resume_text: str):
 
             "decision_score":
                 round(
-                    float(scores[index]),
+                    float(
+                        scores[index]
+                    ),
                     4
                 )
         })
 
-
-    # ========================================================
+    # --------------------------------------------------------
     # SECTOR INTELLIGENCE
-    # ========================================================
+    # --------------------------------------------------------
 
     sector_result = detect_sector(
         resume_text
     )
 
-
     detected_sector = (
         sector_result["sector"]
     )
 
-
-    # ========================================================
+    # --------------------------------------------------------
     # SPECIALIZED ROLE
-    # ========================================================
+    # --------------------------------------------------------
 
-    specialized_role = detect_specialized_role(
-        resume_text,
-        detected_sector
+    specialized_role = (
+        detect_specialized_role(
+            resume_text,
+            detected_sector
+        )
     )
 
-
-    # ========================================================
-    # FINAL CATEGORY
-    # ========================================================
+    # --------------------------------------------------------
+    # PRIMARY ML CATEGORY
+    # --------------------------------------------------------
 
     primary_category = str(
         ml_prediction
     )
 
+    # Sector intelligence is an additional layer.
+    sector_override = (
+        specialized_role is not None
+    )
 
-    # ========================================================
-    # SECTOR-AWARE RESULT
-    # ========================================================
-
-    sector_override = False
-
-
-    if specialized_role is not None:
-
-        # Education / Law are not sufficiently
-        # represented in the 25-category dataset.
-        #
-        # Therefore we expose the sector-specific
-        # classification separately rather than
-        # pretending it came from the ML model.
-
-        sector_override = True
-
-
-    # ========================================================
-    # ALTERNATIVE MESSAGE
-    # ========================================================
+    # --------------------------------------------------------
+    # MESSAGE
+    # --------------------------------------------------------
 
     alternatives = [
-
         item["category"]
-
-        for item in possible_categories[1:3]
+        for item in
+        possible_categories[1:3]
     ]
-
 
     if len(alternatives) >= 2:
 
-        ml_message = (
-
+        message = (
             f"ML primary match: "
             f"{primary_category}. "
-
-            f"The model may also relate this resume "
-            f"to {alternatives[0]} or "
+            f"The model may also relate "
+            f"this resume to "
+            f"{alternatives[0]} or "
             f"{alternatives[1]}."
         )
 
     elif len(alternatives) == 1:
 
-        ml_message = (
-
+        message = (
             f"ML primary match: "
             f"{primary_category}. "
-
-            f"The model may also relate this resume "
-            f"to {alternatives[0]}."
+            f"The model may also relate "
+            f"this resume to "
+            f"{alternatives[0]}."
         )
 
     else:
 
-        ml_message = (
-
+        message = (
             f"ML primary match: "
             f"{primary_category}."
         )
 
-
-    # ========================================================
+    # --------------------------------------------------------
     # PREDICTION STRENGTH
-    # ========================================================
+    # --------------------------------------------------------
 
     if decision_margin < 0.10:
 
-        prediction_strength = "Close match"
+        prediction_strength = (
+            "Close match"
+        )
 
     elif decision_margin < 0.25:
 
-        prediction_strength = "Moderate match"
+        prediction_strength = (
+            "Moderate match"
+        )
 
     else:
 
-        prediction_strength = "Strong match"
+        prediction_strength = (
+            "Strong match"
+        )
 
-
-    # ========================================================
-    # FINAL RESPONSE
-    # ========================================================
+    # --------------------------------------------------------
+    # FINAL RESULT
+    # --------------------------------------------------------
 
     return {
 
         "status":
             "classified",
-
-        # ----------------------------------------------------
-        # ML RESULT
-        # ----------------------------------------------------
 
         "predicted_category":
             primary_category,
@@ -952,7 +894,9 @@ def predict_resume(resume_text: str):
         "match_score":
             round(
                 float(
-                    match_scores[best_index]
+                    match_scores[
+                        best_index
+                    ]
                 ),
                 2
             ),
@@ -979,10 +923,6 @@ def predict_resume(resume_text: str):
         "possible_categories":
             possible_categories,
 
-        # ----------------------------------------------------
-        # SECTOR RESULT
-        # ----------------------------------------------------
-
         "detected_sector":
             detected_sector,
 
@@ -1002,12 +942,8 @@ def predict_resume(resume_text: str):
                 "alternative_sectors"
             ],
 
-        # ----------------------------------------------------
-        # MESSAGE
-        # ----------------------------------------------------
-
         "message":
-            ml_message,
+            message,
 
         "resume_length":
             len(resume_text)
@@ -1015,7 +951,7 @@ def predict_resume(resume_text: str):
 
 
 # ============================================================
-# ROOT
+# ROOT ENDPOINT
 # ============================================================
 
 @app.get("/")
@@ -1044,37 +980,27 @@ def home():
         "supported_sectors": [
 
             "Education",
-
             "Law",
-
             "Technology",
-
             "Finance",
-
             "Engineering",
-
             "Human Resources",
-
             "Marketing & Sales"
         ],
 
         "endpoints": [
 
             "/",
-
             "/health",
-
             "/model-info",
-
             "/predict",
-
             "/predict-pdf"
         ]
     }
 
 
 # ============================================================
-# HEALTH
+# HEALTH ENDPOINT
 # ============================================================
 
 @app.get("/health")
@@ -1100,7 +1026,7 @@ def health():
 
 
 # ============================================================
-# MODEL INFO
+# MODEL INFORMATION
 # ============================================================
 
 @app.get("/model-info")
@@ -1132,34 +1058,29 @@ def model_info():
         "sector_categories": [
 
             "Education",
-
             "Law",
-
             "Technology",
-
             "Finance",
-
             "Engineering",
-
             "Human Resources",
-
             "Marketing & Sales"
         ],
 
         "category_names": [
 
             str(category)
-
-            for category in model.classes_
+            for category
+            in model.classes_
         ],
 
-        "note":
-            (
-                "ML match scores are relative decision-score "
-                "distributions and are not calibrated probabilities. "
-                "Sector detection is an additional rule-based "
-                "intelligence layer."
-            )
+        "note": (
+            "ML match scores are relative "
+            "decision-score distributions "
+            "and are not calibrated "
+            "probabilities. Sector detection "
+            "is an additional rule-based "
+            "intelligence layer."
+        )
     }
 
 
@@ -1191,21 +1112,15 @@ async def predict_pdf(
 ):
 
     # --------------------------------------------------------
-    # Validate filename
+    # FILE VALIDATION
     # --------------------------------------------------------
 
     if not file.filename:
 
         raise HTTPException(
             status_code=400,
-
             detail="No file was provided."
         )
-
-
-    # --------------------------------------------------------
-    # Validate PDF
-    # --------------------------------------------------------
 
     if not file.filename.lower().endswith(
         ".pdf"
@@ -1213,53 +1128,41 @@ async def predict_pdf(
 
         raise HTTPException(
             status_code=400,
-
-            detail=(
-                "Only PDF files are supported."
-            )
+            detail="Only PDF files are supported."
         )
-
 
     try:
 
-        # ====================================================
+        # ----------------------------------------------------
         # READ PDF
-        # ====================================================
+        # ----------------------------------------------------
 
         contents = await file.read()
-
 
         if not contents:
 
             raise HTTPException(
                 status_code=400,
-
-                detail=(
-                    "Uploaded PDF is empty."
-                )
+                detail="Uploaded PDF is empty."
             )
 
-
-        # ====================================================
+        # ----------------------------------------------------
         # PDF READER
-        # ====================================================
+        # ----------------------------------------------------
 
         reader = PdfReader(
             io.BytesIO(contents)
         )
 
-
-        # ====================================================
+        # ----------------------------------------------------
         # EXTRACT TEXT
-        # ====================================================
+        # ----------------------------------------------------
 
         extracted_text = ""
-
 
         for page in reader.pages:
 
             page_text = page.extract_text()
-
 
             if page_text:
 
@@ -1268,45 +1171,37 @@ async def predict_pdf(
                     "\n"
                 )
 
-
-        # ====================================================
-        # CLEAN
-        # ====================================================
-
         extracted_text = clean_text(
             extracted_text
         )
 
-
-        # ====================================================
-        # VALIDATE
-        # ====================================================
+        # ----------------------------------------------------
+        # EXTRACTED TEXT VALIDATION
+        # ----------------------------------------------------
 
         if len(extracted_text) < 20:
 
             raise HTTPException(
                 status_code=400,
-
                 detail=(
-                    "Could not extract enough text "
-                    "from this PDF. The PDF may be "
-                    "scanned or image-based."
+                    "Could not extract enough "
+                    "text from this PDF. "
+                    "The PDF may be scanned "
+                    "or image-based."
                 )
             )
 
-
-        # ====================================================
+        # ----------------------------------------------------
         # PREDICT
-        # ====================================================
+        # ----------------------------------------------------
 
         result = predict_resume(
             extracted_text
         )
 
-
-        # ====================================================
+        # ----------------------------------------------------
         # PDF INFORMATION
-        # ====================================================
+        # ----------------------------------------------------
 
         result["filename"] = (
             file.filename
@@ -1318,21 +1213,15 @@ async def predict_pdf(
             reader.pages
         )
 
-
         return result
 
-
     except HTTPException:
-
         raise
-
 
     except Exception as e:
 
         raise HTTPException(
-
             status_code=500,
-
             detail=(
                 f"PDF processing error: {str(e)}"
             )
@@ -1340,20 +1229,22 @@ async def predict_pdf(
 
 
 # ============================================================
-# SERVER
+# LOCAL / RENDER SERVER
 # ============================================================
 
 if __name__ == "__main__":
 
     import uvicorn
 
+    port = int(
+        os.environ.get(
+            "PORT",
+            8000
+        )
+    )
+
     uvicorn.run(
-
         "main:app",
-
-        host="127.0.0.1",
-
-        port=8000,
-
-        reload=True
+        host="0.0.0.0",
+        port=port
     )
