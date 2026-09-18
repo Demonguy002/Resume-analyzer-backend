@@ -12,3 +12,44 @@ dataset/
 
 .DS_Store
 Thumbs.db
+
+# =========================
+# Frontend - Node / Vite
+# =========================
+frontend/node_modules/
+frontend/dist/
+
+# Environment files
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# =========================
+# Backend - Python
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# =========================
+# IDE / OS
+# =========================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# =========================
+# Python generated files
+# =========================
+*.log
+.pytest_cache/
+.mypy_cache/
