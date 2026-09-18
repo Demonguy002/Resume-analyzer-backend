@@ -1,0 +1,16 @@
+{
+    "dataset": "UpdatedResumeDataSet_clean.csv",
+    "total_samples": 962,
+    "training_samples": 769,
+    "testing_samples": 193,
+    "number_of_categories": 25,
+    "test_accuracy": 99.48,
+    "weighted_precision": 99.57,
+    "weighted_recall": 99.48,
+    "weighted_f1_score": 99.49,
+    "model": "LinearSVC",
+    "C": 1.0,
+    "tfidf_ngram_range": "1-2",
+    "test_size": 0.2,
+    "random_state": 42
+}
