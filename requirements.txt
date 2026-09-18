@@ -5,3 +5,4 @@ pypdf
 joblib
 scikit-learn
 numpy
+scikit-learn==1.8.0
